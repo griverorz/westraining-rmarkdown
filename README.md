@@ -2,7 +2,7 @@
 
 These are the materials for the "Reproducible reports" Brown Bag. At the bottom
 of this document you will find some additional resources to learn more about R
-Markdown. The `simple-report` folder contains the example that was used during
+Markdown. The `simple-report/` folder contains the example that was used during
 the talk. 
 
 # R Markdown and reproducible reports
@@ -62,12 +62,6 @@ talk about the markdown format in a bit, but by now think of plain text.
 _Chunks_ with the code. They are used to include the actual code that you will
 be using. These chunks are delimited by three backticks. 
 
-```
-  ```{r}
-  mean(c(1, 2, 3))
-  ```
-```
-
 In the `simple-report/` folder we will see a more elaborated example and some of
 the other options that R Markdown allows us. 
 
@@ -81,3 +75,9 @@ the other options that R Markdown allows us.
    [here](https://pandoc.org/getting-started.html).
 
 3. An alternative to the R Markdown reports is [Jupyter](http://jupyter.org/). 
+
+4. To learn more about [LaTeX](https://www.latex-project.org/about/).
+
+5. R Markdown can be used to create simple dashboards using
+   [`flexdashboard`](http://rmarkdown.rstudio.com/flexdashboard/). A more
+   complete (R-based) solution is [Shiny.](https://shiny.rstudio.com/).
