@@ -63,9 +63,9 @@ _Chunks_ with the code. They are used to include the actual code that you will
 be using. These chunks are delimited by three backticks. 
 
 ```
-  ```{r}
-  mean(c(1, 2, 3))
-  ```
+```{r}
+mean(c(1, 2, 3))
+```
 ```
 
 In the `simple-report/` folder we will see a more elaborated example and some of
