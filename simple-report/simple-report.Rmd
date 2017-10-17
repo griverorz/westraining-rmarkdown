@@ -1,0 +1,331 @@
+--- 
+title: "Income nonresponse in a opinion survey"
+subtitle: "An example of `rmarkdown`"
+author: "Gonzalo Rivero"
+date: "`r format(Sys.time(), '%B, %d %Y')`"
+output:
+  # word_document:
+  #   toc: no
+  pdf_document:
+    fig_height: 4.5
+    fig_width: 5
+    toc: yes
+    number_sections: true
+    includes: 
+      in_header: preamble.tex
+bibliography: rmarkdown-bib.bib
+abstract: |
+  In this report we discuss several modeling strategies to analyze item
+  nonresponse in an opinion survey. We try parametric and nonparametric models and
+  we find that the number of contacts is the most useful variable to predict
+  whether someone will provide their income to the interviewer. This result has
+  consequences for the explotation of paradata information in the development of
+  weights. 
+---
+
+```{r include=FALSE}
+library(readr)
+library(gam)
+library(partykit)
+library(knitr); library(rmarkdown)
+library(splines)
+library(DBI); library(RPostgreSQL)
+library(xtable); options(xtable.comment=FALSE)
+
+opts_chunk$set(autodep=TRUE, 
+               message=FALSE, 
+               warning=FALSE)
+```
+
+```{r setup, include=FALSE}
+drv <- dbDriver("PostgreSQL")
+con <- dbConnect(drv, 
+                 host='localhost', 
+                 port='5432', 
+                 dbname='rmarkdown',
+                 user='gonzalorivero', 
+                 password='')
+```
+
+```{r include=FALSE}
+ceo <- read_csv("./data/ceo.csv")
+```
+
+# Introduction
+
+In this report we perform a analysis of the item-nonresponse to the income
+question in an opinion survey. The data comes from the survey organization ABC,
+a polling institute in Europe, and contains information about the demographic
+attributes and political attitudes of `r nrow(ceo)` individuals that were
+interviewed using quota sampling. In this analysis, we will only use information
+about the age, gender and habitat of the respondant to better understand who
+does not provide information about income in a face-to-face survey. Our results
+are very relevant to the study of sensitive questions.
+
+# The dataset
+
+Let's start by exploring the dataset. For instance, we could take a look at the
+first rows to see the structure of the data:
+
+```{r}
+head(ceo)
+```
+
+We can also get some summary statistics to get a clearer picture of the data we
+are trying to analyze. We could use a customized function to get more detailed
+information but the default `summary` in `R` is sufficient:
+
+```{r}
+summary(ceo)
+```
+
+We could go to the codebook to check the specific cutoffs of the habitat
+variable, but suffice to notice that smaller values correspond to smaller
+populations and that the highest category (category 6) refers to cities with
+populations above 1 million people.
+
+The age variable goes up to `r max(ceo$age)`. It may be worth recoding the
+variable to ensure that our modeling is not driven by a few outliers. We could
+take a look at a histogram to evaluate how many cases are in the higher tail of
+the distribution:
+
+```{r echo=FALSE, fig.align="center", dpi=300}
+hist(ceo$age, 
+     main="Histogram of the age variable", 
+     xlab="Age")
+```
+
+It makes sense to trim the highest values to, for instance, 85. 
+
+```{r}
+ceo$age[ceo$age >= 85] <- 85
+```
+
+Notice that the income variable is still coded such that the "No answer/Don't
+Know" categories appear as values 98 and 99. We first start by cleaning the
+dataset and collapsing these two categories into missing values. Our new
+variable `R`, following the convention in the literature, will be an indicator
+that takes value `TRUE` whenever the respondent _has not answered_ the income
+question.
+
+There are several ways of accomplishing this but the easiest way is to encode as
+a `logical` and then coerce the `logical` to a `factor`. We will print another
+summary of the data to ensure that it looks correct now.
+
+```{r}
+ceo$R <- factor(ceo$income >= 98)
+summary(ceo)
+```
+
+# Analysis
+
+## The basic model
+
+Income is known to be a sensitive question in the literature.
+@tourangeau2007sensitive and @yan2010trends review the literature by survey
+methodologists on reporting errors in surveys on sensitive topics, noting
+parallels and differences from the psychological literature on social
+desirability. As @tourangeau2007sensitive put it
+
+>  The extent of misreporting depends on whether the respondent has anything
+>  embarrassing to report and on design features of the survey. The survey
+>  evidence also indicates that misreporting on sensitive topics is a more or
+>  less motivated process in which respondents edit the information they report
+>  to avoid embarrassing themselves in the presence of an interviewer or to avoid
+>  repercussions from third parties.
+
+For our analysis, we will assume that the probability of responding to the
+survey can be characterized by the following model:
+
+$$
+y = 
+\left\{\begin{array}{cl} 
+0 & \text{if } \alpha + \beta x + \varepsilon > 0 \\
+1 & \text{otherwise} 
+\end{array}\right.
+$$
+
+where $\varepsilon \sim \text{logistic}(0, 1)$. We can estimate this structure
+using the `glm` function with a `binomial` family (defaults to a `logit` link).
+Based on previous research, we decided to transform the age variable using a
+second-order polynomial.
+
+```{r}
+pmodel <- glm(R ~ age + I(age^2) + factor(gender) + factor(habitat),
+                 data=ceo,
+                 family=binomial)
+```
+
+The result of the estimation is shown below:
+ 
+```{r results="asis", echo=FALSE}
+xtable(summary(pmodel))
+```
+
+In the model above, we see that age, using a quadratic transformation, is
+statistically significative as well as a couple of categories of the habitat
+variable. However, it sometimes is hard to see the effect of a variable by
+looking only at the coefficients. In consequence, we can try to see how the
+predicted values look like for individuals between 18 and 85 years old.
+
+```{r include=FALSE}
+simdata <- expand.grid("age"=18:85,
+                       "gender"=1,
+                       "habitat"=4)
+
+yhat_pmodel <- predict(pmodel, newdata=simdata, "response")
+```
+
+We can now show a plot to have a clearer perspective. In this plot, we show the
+predicted variables in the interval $[0, 0.5]$ to put some perspective on the
+curvature of the function. As it can be seen the function is pretty flat and the
+difference across age groups that is suggested by the fit is small.
+
+```{r echo=FALSE, fig.align="center"}
+plot(simdata$age,
+     yhat_pmodel,
+     type="l",
+     col="red", 
+     bty="n",
+     main="Predicted values for age", 
+     xlab="Age", 
+     ylab="Predicted probability", 
+     ylim=c(0, .5))
+```
+
+## A more flexible model
+
+The model above makes very strong assumptions about the functional form of the
+age variable. It seems a good idea to be slightly more flexible and use instead
+a semi-parametric approach that adjusts a spline to age and keeps the rest of
+the model _as is_.
+
+```{r}
+npmodel <- gam(R ~ s(age) + factor(gender) + factor(habitat),
+               data=ceo, 
+               family=binomial, 
+               select=TRUE)
+```
+
+The interesting part of the model corresponds to the ANOVA of the nonparametric
+terms, which we show below in a nicely formatted table.
+
+```{r echo=FALSE, results="asis"}
+xtable(anova(npmodel))
+```
+
+Another approach would be to use a flexible model like a classification tree,
+which has several advantages for us:
+
+1. It performs variable selection in a very natural way by simply not picking a variable. 
+2. It is very easy to interpret as a series of decision rules. 
+3. It approximates transformations of the input variables as well as interactions. 
+
+There are many different types of trees, but in this case, we have chosen the
+one implemented in `partykit`[^1] which corresponds to the Conditional Inference
+tree, a variety that performs hypothesis testing in each of the splits and gets
+around some of the well known issues with older algorithms like CART. We can run
+it using the same interface as the `glm` above by simply using the default
+control parameters.
+
+[^1]: More information about `partykit` can be found [here.](https://cran.r-project.org/web/packages/partykit/index.html) 
+
+```{r}
+tmodel <- ctree(R ~ age + factor(gender) + factor(habitat),
+                data=ceo)
+print(tmodel)
+```
+
+The function `print` allows us to see the tree in a plain text format, which may
+not be the best one, but conveys enough information about the decision rules.
+
+## Comparing the three models
+
+It is probably more interesting to see how the three models compare together by
+plotting their predictions in the same figure:
+
+```{r include=FALSE}
+yhat_npmodel <- predict(npmodel, newdata=simdata, type="response")
+yhat_tmodel <- predict(tmodel, newdata=simdata, type="prob")[, 2]
+```
+
+```{r comparison, echo=FALSE, fig.align="center"}
+plot(simdata$age,
+     yhat_pmodel,
+     type="l",
+     col="red", 
+     bty="n",
+     main="Predicted values for age", 
+     xlab="Age", 
+     ylab="Predicted probability",
+     ylim=c(0, .5), 
+     lwd=3, lty=1)
+lines(18:85, yhat_npmodel, col="blue", lty=2)
+lines(18:85, yhat_tmodel, col="darkgreen", lty=3)
+legend(65, .15,
+       legend=c("GLM", "GAM", "ctree"), 
+       col=c("red", "blue", "darkgreen"), 
+       lty=1:3)
+```
+
+The main interpretation here is that the differences between the three models
+are relatively small and it seems that the tree model *more aggresively*
+discounts the potential effect of age.
+
+## Adding external information
+
+Say now that we have access to a paradata database that contains records of the
+number of contact attempts made for each of the ID. One could potentially argue
+that the degreee to which the respondent was cooperative should predict how
+likely the respondent is to provide information about the income question. In
+order to test this theory, we first need to pull the information from the SQL
+database and then merge the resulting information with our data using the
+individual ID as key.
+
+The query that will pull the information is interesting in this case and so we
+included it in this report:
+
+```{sql connection=con, output.var="ncontacts"}
+select * from paradata;
+```
+
+If we merge the survey dataset and the paradata information we could then rerun
+the same models as above to see whether the number of contacts has an effect on
+the probability of responding. To simplify matters, we will keep here only the
+tree model.
+
+```{r include=FALSE}
+ceo <- merge(ceo, ncontacts, by="id")
+tmodel <- ctree(R ~ age + factor(gender) + factor(habitat) + ncontacts,
+                data=ceo)
+```
+
+The resulting tree captures the idea that the response to the question is mostly
+driven by the number of contact attempts and as a matter of fact none of the
+other variables get selected.
+
+```{r tree, echo=FALSE, fig.align="center"}
+plot(tmodel)
+```
+
+We could have explored other models using `stan` or `python` but the model is
+good enough for our purposes. We could even have included `C++` code by leveraging 
+the `Rcpp` library
+
+# Conclusions
+
+We have seen here how age is not a strong predictor of the likelihood of
+responding to the income question in the ABC survey. Although a GLM and a
+semiparametric model show a nonlinear effect of age, our tree model does not
+even pick the age variable. It seems that people report their income based
+exclusively on the number of contact attempts.
+
+# Bibliography
+
+
+
+
+
+
+
+
